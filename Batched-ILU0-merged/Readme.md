@@ -13,5 +13,9 @@
 
 
 
+` nvcc factorization.cu ILU_0_gpu.cu parILU_0_gpu.cu isai_gpu.cu  matrix.cu mmio.cpp  ReadWriteData.cpp SolverResults.cu PrecondBiCGSTAB_exact_ilu0_app1_segregated_gpu.cu main_bicgstab_ilu_segregated.cpp -o ilu_segregated   `
+
+
+
 
 

@@ -19,8 +19,9 @@ namespace {
 
 #include "Bicgstab_common.hpp"
 
-__device__ void legacy_sparse_lower_triangular_solve(const int num_rows, const int* const L_row_ptrs, const int* const L_col_idxs, 
-const double* const L_values, const double* const vec_shared, volatile double* const temp_vec_shared)
+__device__ __forceinline__ void legacy_sparse_lower_triangular_solve(const int num_rows, const int* const __restrict__ L_row_ptrs,
+     const int* const __restrict__ L_col_idxs, 
+const double* const __restrict__ L_values, const double* const __restrict__ vec_shared, volatile double* const __restrict__ temp_vec_shared)
 {   
    
         const int row_index = threadIdx.x;
@@ -68,8 +69,8 @@ const double* const L_values, const double* const vec_shared, volatile double* c
 }
 
 
-__device__ void legacy_sparse_upper_triangular_solve(const int num_rows,  const int* const U_row_ptrs, const int* const U_col_idxs, 
-const double* const U_values, volatile const double* const temp_vec_shared, volatile double* const vec_hat_shared)
+__device__ __forceinline__ void legacy_sparse_upper_triangular_solve(const int num_rows,  const int* const __restrict__ U_row_ptrs, const int* const __restrict__ U_col_idxs, 
+const double* const __restrict__ U_values, volatile const double* const __restrict__ temp_vec_shared, volatile double* const __restrict__ vec_hat_shared)
 {
     const int row_index = threadIdx.x;
 
@@ -111,9 +112,9 @@ const double* const U_values, volatile const double* const temp_vec_shared, vola
 
 }
 
-__device__ void ApplyPreconditionerILU(const int num_rows , const int* const L_row_ptrs, 
-    const int* const L_col_idxs , const double* const L_values,  const int* const U_row_ptrs,
-    const int* const U_col_idxs, const double* const U_values,  const double* const vec_shared,volatile double* const vec_hat_shared)
+__device__ __forceinline__ void ApplyPreconditionerILU(const int num_rows , const int* const __restrict__ L_row_ptrs, 
+    const int* const __restrict__ L_col_idxs , const double* const __restrict__ L_values,  const int* const __restrict__ U_row_ptrs,
+    const int* const __restrict__ U_col_idxs, const double* const __restrict__ U_values,  const double* const __restrict__ vec_shared,volatile double* const __restrict__ vec_hat_shared, double* const temp_ilu_requirements_shared)
 {
 
    
@@ -127,7 +128,8 @@ __device__ void ApplyPreconditionerILU(const int num_rows , const int* const L_r
     assert(num_rows <= blockDim.x);
     //TODO: For upper trsv, use thread 0 for the bottommost row, this way we could avoid :  assert(num_rows <= blockDim.x), as there won't be a possibility of deadlock then!
 
-    __shared__  volatile double temp_vec_shared[MAX_NUM_ROWS];
+   // __shared__  volatile double temp_vec_shared[MAX_NUM_ROWS];
+    volatile double* const __restrict__ temp_vec_shared = temp_ilu_requirements_shared;
 
     for(int i = threadIdx.x ; i < num_rows; i += blockDim.x)
     {
@@ -150,15 +152,15 @@ __device__ void ApplyPreconditionerILU(const int num_rows , const int* const L_r
 
 
 
-__global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, const int num_nz, const int num_pages, const int* const row_ptrs, 
-    const int* const col_inds, const double* const vals_mat, const double* const vals_rhs, double* const vals_ans,
-    const int L_nnz , const int* const L_row_ptrs, const int* const L_col_idxs, const double* const L_vals ,
-    const int U_nnz, const int* const U_row_ptrs, const int* const U_col_idxs, const double* const U_vals,
-    float* const iter_counts , int* const conv_flags, double* const iter_residual_norms)
+__global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, const int num_nz, const int num_pages, const int* const __restrict__ row_ptrs, 
+    const int* const __restrict__ col_inds, const double* const __restrict__ vals_mat, const double* const __restrict__ vals_rhs, double* const __restrict__ vals_ans,
+    const int L_nnz , const int* const __restrict__ L_row_ptrs, const int* const __restrict__ L_col_idxs, const double* const __restrict__ L_vals ,
+    const int U_nnz, const int* const __restrict__ U_row_ptrs, const int* const __restrict__ U_col_idxs, const double* const __restrict__ U_vals,
+    float* const __restrict__ iter_counts , int* const __restrict__ conv_flags, double* const __restrict__ iter_residual_norms)
 {
   /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~shared memory ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
-   
+   /*
     __shared__ double x_shared[MAX_NUM_ROWS];
     __shared__ double r_shared[MAX_NUM_ROWS];
     __shared__ double r_hat_shared[MAX_NUM_ROWS];
@@ -171,7 +173,19 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
 
     __shared__ double s_hat_shared[MAX_NUM_ROWS];
     __shared__ double p_hat_shared[MAX_NUM_ROWS];
- 
+    */
+
+    extern __shared__ double shared_mem[];
+    double* __restrict__ x_shared = shared_mem;
+    double* __restrict__ r_shared = x_shared + num_rows;
+    double* __restrict__ r_hat_shared = r_shared + num_rows;
+    double* __restrict__ p_shared = r_hat_shared + num_rows;
+    double* __restrict__ v_shared = p_shared + num_rows;
+    double* __restrict__ s_shared = v_shared + num_rows;
+    double* __restrict__ t_shared = s_shared + num_rows;
+    double* __restrict__ s_hat_shared = t_shared + num_rows;
+    double* __restrict__ p_hat_shared = s_hat_shared + num_rows;
+    double* __restrict__ temp_ilu_requirements_shared = p_hat_shared + num_rows; // 1 * num_rows
 
 
     int page_id = blockIdx.x;
@@ -190,21 +204,38 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
 
         /*--------------------------------------------------- Preconditioner already generated ----------------------------------------------------*/
 
+        __shared__ double res_initial;
+        __shared__ double rho_old;
+        __shared__ double rho_new;
+        __shared__ double omega_old;
+        __shared__ double omega_new;
+        __shared__ double alpha;
+        __shared__ double beta;
+        __shared__ double iter_residual_norm;
+        __shared__ double b_norm;
+        __shared__ int conv_flag;
 
-        double res_initial = L2Norm(num_rows, r_shared); 
+        L2Norm(num_rows, r_shared, res_initial); 
+
+        __syncthreads();
+
+        if(threadIdx.x == 0)
+        {
+            iter_residual_norm = res_initial;
+            rho_old = 1;
+            rho_new = 1;
+            omega_old = 1;
+            omega_new = 1;
+            alpha = 1;
+            beta = 1;
+            conv_flag = -1;
+        }
           
-        double iter_residual_norm = res_initial;
+       
+        L2Norm(num_rows, vals_rhs + page_id*num_rows, b_norm);
 
-        double rho_old = 1;
-        double rho_new = 1;
-        double omega_old = 1;
-        double omega_new = 1;
-        double alpha = 1;
-        double beta = 1; 
-
-        double b_norm = L2Norm(num_rows, vals_rhs + page_id*num_rows);
+        __syncthreads();
         
-        int conv_flag = -1;
 
 
         if(b_norm == 0)
@@ -246,7 +277,8 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                 
                     while(iter < MAX_ITER)
                     {
-                        rho_new = inner_product(num_rows, r_shared, r_hat_shared);
+                        inner_product(num_rows, r_shared, r_hat_shared, rho_new);
+                        __syncthreads();
 
                         if(rho_new == 0)
                         {
@@ -258,31 +290,45 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                             break;
                         }
                         
-                        beta = (rho_new/rho_old)*(alpha/omega_old);
-                    
-                        
+                        if(threadIdx.x == 0)
+                        {
+                            beta = (rho_new/ rho_old) * ( alpha/ omega_old);
+                        }
+                        __syncthreads();
+        
+               
                         Update_p(num_rows,p_shared,r_shared ,v_shared,beta,omega_old);
                         __syncthreads();
                         
 
-                        ApplyPreconditionerILU(num_rows, L_row_ptrs, L_col_idxs, L_vals + page_id * L_nnz, U_row_ptrs, U_col_idxs , U_vals + page_id * U_nnz, p_shared, p_hat_shared);
+                        ApplyPreconditionerILU(num_rows, L_row_ptrs, L_col_idxs, L_vals + page_id * L_nnz, U_row_ptrs, U_col_idxs , U_vals + page_id * U_nnz, p_shared, p_hat_shared, temp_ilu_requirements_shared);
 
                         __syncthreads();
 
                         SpMV(num_rows, row_ptrs,col_inds, vals_mat + page_id*num_nz, p_hat_shared, v_shared);
                         __syncthreads(); 
                         
-                        
-                        double r_hat_and_v_inner_prod = inner_product(num_rows,r_hat_shared,v_shared);
-                        alpha = rho_new/r_hat_and_v_inner_prod;        
-                    
+                        __shared__ double r_hat_and_v_inner_prod;
+                        inner_product(num_rows,r_hat_shared,v_shared, r_hat_and_v_inner_prod);
+                        __syncthreads();
 
+
+                        if(threadIdx.x == 0)
+                        {
+                            alpha = rho_new/r_hat_and_v_inner_prod;   
+                        }
+                        __syncthreads();  
+                        
+                              
                         Update_s(num_rows,s_shared,r_shared,alpha,v_shared);
                         __syncthreads();
                         
 
-                        iter_residual_norm = L2Norm(num_rows, s_shared); //an estimate
                         
+                        L2Norm(num_rows, s_shared, iter_residual_norm); //an estimate
+                        __syncthreads();
+
+
                         iter = iter + 0.5;
 
                       
@@ -291,7 +337,12 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                             Update_x_middle(num_rows,x_shared,p_hat_shared,alpha);
                             __syncthreads();
 
-                            conv_flag = 1;
+                            if(threadIdx.x == 0)
+                            {
+                                conv_flag = 1;
+                            }
+                            __syncthreads();
+                         
 
                             
                             break;
@@ -299,7 +350,7 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                         }
 
                      
-                        ApplyPreconditionerILU(num_rows, L_row_ptrs, L_col_idxs, L_vals + page_id * L_nnz, U_row_ptrs, U_col_idxs , U_vals + page_id * U_nnz, s_shared, s_hat_shared);
+                        ApplyPreconditionerILU(num_rows, L_row_ptrs, L_col_idxs, L_vals + page_id * L_nnz, U_row_ptrs, U_col_idxs , U_vals + page_id * U_nnz, s_shared, s_hat_shared, temp_ilu_requirements_shared);
                         __syncthreads();
 
 
@@ -307,11 +358,18 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                         __syncthreads();
                     
 
+                        __shared__ double t_and_s_inner_prod;
+                        inner_product(num_rows,t_shared,s_shared, t_and_s_inner_prod);
+                        __shared__ double t_and_t_inner_prod;
+                        inner_product(num_rows,t_shared,t_shared, t_and_t_inner_prod);
+                        __syncthreads();
 
-                        double t_and_s_inner_prod = inner_product(num_rows,t_shared,s_shared);
-                        double t_and_t_inner_prod = inner_product(num_rows,t_shared,t_shared);
-                        omega_new = t_and_s_inner_prod/t_and_t_inner_prod;
-                        
+                        if(threadIdx.x == 0)
+                        {
+                            omega_new = t_and_s_inner_prod/t_and_t_inner_prod;
+                        }
+                       __syncthreads();
+
 
                         Update_x(num_rows,x_shared,p_hat_shared,s_hat_shared,alpha,omega_new);
                         __syncthreads();
@@ -323,18 +381,30 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
                         Update_r(num_rows,r_shared,s_shared,t_shared,omega_new);
                         __syncthreads();
 
-                        iter_residual_norm = L2Norm(num_rows,r_shared);
-                        rho_old = rho_new;
-                        omega_old = omega_new;
+                        L2Norm(num_rows,r_shared, iter_residual_norm);
+                        __syncthreads();
+
+
+                        if(threadIdx.x == 0)
+                        {
+                            rho_old = rho_new;
+                            omega_old = omega_new;
+                        }
+                        __syncthreads();
 
                         
                         if( iter_residual_norm < ATOL)
                         {   
-                            conv_flag = 1;
+                            if(threadIdx.x == 0)
+                            {
+                                conv_flag = 1;
+                            }
+                            __syncthreads();
+                          
                             break;
                         }
 
-                        
+            
                     }
 
                     __syncthreads();
@@ -406,7 +476,9 @@ int Batched_BiCGSTAB_ILU_Gpu_helper(const PagedCSRMatrices & A_pages,const Paged
 
     //------------------------------------------------------------------------------- Call main solver kernel-------------------------------------------------//
 
-    KernelBatchedPreconditionedBiCGSTAB_ILU<<< grid_solver, block , 0  >>>(A_pages.GetNumRows(), A_pages.GetNumNz(), A_pages.GetNumPages(),
+    const int dynamic_shared_mem_bytes = 10 * A_pages.GetNumRows() * sizeof(double);
+
+    KernelBatchedPreconditionedBiCGSTAB_ILU<<< grid_solver, block , dynamic_shared_mem_bytes  >>>(A_pages.GetNumRows(), A_pages.GetNumNz(), A_pages.GetNumPages(),
     A_pages.GetPtrToGpuRowPtrs(),A_pages.GetPtrToGpuColInd(), A_pages.GetPtrToGpuValues(), b_pages.GetPtrToGpuValues(), x_pages.GetPtrToGpuValues(),
     L_pages.GetNumNz(), L_pages.GetPtrToGpuRowPtrs(), L_pages.GetPtrToGpuColInd(), L_pages.GetPtrToGpuValues(), 
     U_pages.GetNumNz() ,U_pages.GetPtrToGpuRowPtrs(), U_pages.GetPtrToGpuColInd(), U_pages.GetPtrToGpuValues(),

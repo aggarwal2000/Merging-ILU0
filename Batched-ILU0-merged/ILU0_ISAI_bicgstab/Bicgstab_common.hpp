@@ -2,8 +2,8 @@
 
 //TODO: parallel reductions(norm, inner product)
 
-__device__ void ComputeResidualVec(const int num_rows,const int* const A_row_ptrs_shared,const int* const A_col_inds_shared,
-    const double* const A_vals_shared,const double* const b_shared,const double* const x_shared, double* const res_shared)
+__device__ __forceinline__ void ComputeResidualVec(const int num_rows,const int* const __restrict__ A_row_ptrs_shared,const int* const __restrict__ A_col_inds_shared,
+    const double* const __restrict__ A_vals_shared,const double* const __restrict__ b_shared,const double* const __restrict__ x_shared, double* const __restrict__ res_shared)
 {
     
     int num_warps_in_block = blockDim.x/WARP_SIZE;
@@ -94,6 +94,39 @@ __device__ double inner_product(const int num_rows, const double* const vec1_sha
 
 }
 
+__device__ __forceinline__ void inner_product(const int num_rows, const double* const vec1_shared, const double* const vec2_shared, double & result_shared)
+{   
+   
+    const int local_warp_id = threadIdx.x/WARP_SIZE;
+    const int id_in_warp = threadIdx.x%WARP_SIZE;
+
+    //use first warp
+    if(local_warp_id == 0)
+    {   
+        double temp = 0;
+
+        for(int idx = id_in_warp; idx < num_rows; idx += WARP_SIZE)
+        {
+            temp += vec1_shared[idx] * vec2_shared[idx];
+        }
+
+        double val = temp;
+
+        for(int offset = WARP_SIZE/2; offset > 0; offset /= 2)
+        {
+              val += __shfl_down_sync(FULL_MASK, val, offset);
+        }
+
+        if(id_in_warp == 0)
+        {
+            result_shared = val; 
+        }
+
+    }
+
+
+}
+
 
 
 __device__ double L2Norm(const int num_rows,const double* const vec_shared)
@@ -102,11 +135,22 @@ __device__ double L2Norm(const int num_rows,const double* const vec_shared)
 }
 
 
+__device__ __forceinline__ void L2Norm(const int num_rows,const double* const __restrict__ vec_shared, double & result_shared)
+{
+    inner_product(num_rows,vec_shared,vec_shared, result_shared);
+    
+    if(threadIdx.x == 0)
+    {
+        result_shared = sqrt(result_shared); 
+    }
+
+}
 
 
-__device__ void initialization(const int num_rows, const int num_nz,const int* const row_ptrs,const int* const col_inds,
-    const double* const vals_mat,const double* const vals_rhs ,double* const  x_shared,double* const v_shared,double* const p_shared,
-double* const r_shared,double* const r_hat_shared)
+
+__device__ __forceinline__ void initialization(const int num_rows, const int num_nz,const int* const __restrict__ row_ptrs,const int* const __restrict__ col_inds,
+    const double* const __restrict__ vals_mat,const double* const __restrict__ vals_rhs ,double* const __restrict__ x_shared,double* const __restrict__ v_shared,double* const __restrict__ p_shared,
+double* const __restrict__ r_shared,double* const __restrict__ r_hat_shared)
 {
     int num_warps_in_block = blockDim.x/WARP_SIZE;
     int local_thread_id = threadIdx.x; //local thread id in block
@@ -148,8 +192,8 @@ double* const r_shared,double* const r_hat_shared)
 }
 
 
-__device__ void Update_p(const int num_rows,double* const p_shared,const double* const r_shared,const double* const v_shared,
-    const double beta,const double omega_old)
+__device__ __forceinline__ void Update_p(const int num_rows,double* const __restrict__ p_shared,const double* const __restrict__ r_shared,const double* const __restrict__ v_shared,
+    const double & beta,const double & omega_old)
 {
     
     for(int i = threadIdx.x ; i < num_rows; i = i + blockDim.x)
@@ -162,7 +206,8 @@ __device__ void Update_p(const int num_rows,double* const p_shared,const double*
 } 
 
 
-__device__ void Update_s(const int num_rows,double* const s_shared,const double* const r_shared,const double alpha,const double* const v_shared)
+__device__ __forceinline__ void Update_s(const int num_rows,double* const __restrict__ s_shared,const double* const __restrict__ r_shared,
+const double & alpha,const double* const __restrict__ v_shared)
 {
     for(int i = threadIdx.x; i < num_rows; i = i + blockDim.x)
     {
@@ -170,8 +215,8 @@ __device__ void Update_s(const int num_rows,double* const s_shared,const double*
     }
 }
 
-__device__ void Update_x(const int num_rows,double* const x_shared,const double* const p_shared,const double* const s_shared,const double alpha,
-    const double omega_new)
+__device__ __forceinline__ void Update_x(const int num_rows,double* const __restrict__ x_shared,const double* const __restrict__ p_shared,
+const double* const __restrict__ s_shared, const double & alpha, const double & omega_new)
 {
     for(int i = threadIdx.x; i < num_rows; i = i + blockDim.x)
     {
@@ -180,7 +225,7 @@ __device__ void Update_x(const int num_rows,double* const x_shared,const double*
 }
 
 
-__device__ void Update_x_middle(const int num_rows, double* const x_shared,const double* const p_shared, const double alpha)
+__device__ __forceinline__ void Update_x_middle(const int num_rows, double* const __restrict__ x_shared,const double* const __restrict__ p_shared, const double & alpha)
 {   
     for(int i = threadIdx.x; i < num_rows; i = i + blockDim.x)
     {
@@ -191,7 +236,7 @@ __device__ void Update_x_middle(const int num_rows, double* const x_shared,const
 
 
 
-__device__ void Update_r(const int num_rows,double* const r_shared,const double* const s_shared,const double* const t_shared,const double omega_new)
+__device__ __forceinline__ void Update_r(const int num_rows,double* const __restrict__ r_shared,const double* const __restrict__ s_shared,const double* const __restrict__ t_shared,const double & omega_new)
 {
     
     for(int i = threadIdx.x; i < num_rows; i = i + blockDim.x)
@@ -206,8 +251,8 @@ __device__ void Update_r(const int num_rows,double* const r_shared,const double*
 
 
 
-__device__ void SpMV(const int num_rows,const int* const mat_row_ptrs_shared,const int* const mat_col_inds_shared,
-    const double* const mat_vals_shared,const double* const vec_shared,double* const ans_shared)
+__device__ __forceinline__ void SpMV(const int num_rows,const int* const __restrict__ mat_row_ptrs_shared,const int* const __restrict__ mat_col_inds_shared,
+    const double* const __restrict__ mat_vals_shared,const double* const __restrict__ vec_shared,double* const __restrict__ ans_shared)
 {
   
     int num_warps_in_block = blockDim.x/WARP_SIZE;

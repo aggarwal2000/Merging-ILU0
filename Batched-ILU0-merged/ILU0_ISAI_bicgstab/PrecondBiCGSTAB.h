@@ -25,3 +25,6 @@ void Batched_General_ISAI_Preconditioned_BiCGSTAB_Gpu(const std::vector<std::str
 
 void Batched_conv_ILU_app1_Preconditioned_BiCGSTAB_merged_Gpu(const std::vector<std::string> & subdir, const PagedCSRMatrices & A_pages,
     const PagedVectors& b_pages,PagedVectors & x_pages,const bool is_scaled,  SolverResults & solver_results  );
+
+void Batched_conv_ILU_app1_Preconditioned_BiCGSTAB_segregated_Gpu(const std::vector<std::string> & subdir, const PagedCSRMatrices & A_pages,
+    const PagedVectors& b_pages,PagedVectors & x_pages,const bool is_scaled,  SolverResults & solver_results  );

@@ -12,7 +12,7 @@
 #include "SolverResults.h"
 #include "factorization.h"
 
-
+#include "ILU_0.h"
 
 namespace {
 
@@ -142,108 +142,6 @@ __device__ __forceinline__ void ApplyPreconditionerILU_mixed(const int num_rows,
     legacy_sparse_upper_triangular_solve_mixed(num_rows, row_ptrs, col_inds, factored_array_page, diag_info, temp_vec_shared, vec_hat_shared);
 }
 
-__device__ __forceinline__ void fill_partial_current_row_array(const int nrows, const int curr_row_index, double* const __restrict__ current_row_elements_arr, const int* const __restrict__ row_ptrs, 
-    const int* const __restrict__ col_idxs, const double* const __restrict__ page_values, const int* const __restrict__ diag_ptrs)
-{
-    const int diag_ele_loc = diag_ptrs[curr_row_index];
-    const int row_end_loc = row_ptrs[curr_row_index + 1];
-
-
-    for(int i = threadIdx.x + curr_row_index; i < nrows ; i += blockDim.x)
-    {
-        current_row_elements_arr[i] = 0;
-    }
-
-    __syncthreads();
-
-    for(int loc = threadIdx.x + diag_ele_loc ; loc < row_end_loc ; loc += blockDim.x)
-    {
-        current_row_elements_arr[ col_idxs[loc] ] = page_values[ loc ];
-    
-    }
-
-}
-
-        
-__device__ __forceinline__ void modify_rows_below_curr_row(const int nrows, const int curr_row_index,const double* const __restrict__ column_elements_array_for_current_row, const int* const __restrict__ row_ptrs, 
-    const int* const __restrict__ col_idxs, double* const __restrict__ page_values, const int* const __restrict__ diag_ptrs, double* const __restrict__ row_ele_arr)
-{       
-    const int warp_id = threadIdx.x / WARP_SIZE;
-
-    const int id_within_warp = threadIdx.x % WARP_SIZE;
-
-    const int total_num_warps_in_block = blockDim.x / WARP_SIZE;
-
-    //__shared__ double row_ele_arr[MAX_NUM_ROWS];
-
-    //initilaize it with zeroes
-
-    for(int i = threadIdx.x + curr_row_index + 1; i < nrows ; i += blockDim.x)
-    {
-        row_ele_arr[i] = 0;
-    }
-
-    __syncthreads();
-    
-    //one warp per row
-    for(int row_below_index = warp_id + curr_row_index + 1; row_below_index < nrows ; row_below_index += total_num_warps_in_block )
-    {
-        for(int i = id_within_warp + row_ptrs[row_below_index] ; i < row_ptrs[row_below_index + 1]; i += WARP_SIZE)
-        {   
-            const int col_index = col_idxs[i];
-    
-            if(col_index == curr_row_index)
-            {   
-                double diag_ele = page_values[diag_ptrs[curr_row_index]];
-                assert(diag_ele != 0);
-                double row_ele = page_values[i] / diag_ele;
-                row_ele_arr[row_below_index] = row_ele;
-                page_values[i] = row_ele;
-            }
-            
-            __syncwarp(__activemask()); //else a warning
-
-            if(col_index > curr_row_index)
-            {
-                double col_ele = column_elements_array_for_current_row[col_index];
-                page_values[i] -= row_ele_arr[row_below_index] * col_ele; 
-
-            }
-            
-
-        }
-
-    }
-    
-
-}
-
-    
-
-__device__ __forceinline__ void compute_exact_ilu_0_approach1(const int num_rows, const int num_nz, const int* const __restrict__ row_ptrs, 
-    const int* const __restrict__ col_inds, double* const __restrict__ factored_array, const int* const __restrict__ diag_info, double* const temp_ilu_requirements_shared)
-{   
-    
-    const int page_id = blockIdx.x;
-
-   // __shared__ double current_row_elements_arr[MAX_NUM_ROWS];
-
-    double* __restrict__ current_row_elements_arr = temp_ilu_requirements_shared;
-    double* __restrict__ row_ele_arr = current_row_elements_arr + num_rows;
-
-    for(int curr_row_index = 0; curr_row_index < num_rows; curr_row_index++)
-    {   
-       
-        fill_partial_current_row_array(num_rows, curr_row_index , current_row_elements_arr, row_ptrs, col_inds , factored_array +  num_nz * page_id, diag_info);
-
-        __syncthreads();
-
-        modify_rows_below_curr_row(num_rows, curr_row_index, current_row_elements_arr, row_ptrs, col_inds, factored_array + num_nz * page_id, diag_info, row_ele_arr);
-
-        __syncthreads();
-
-    }
-}
 
 
 __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, const int num_nz, const int num_pages, const int* const __restrict__ row_ptrs, 
@@ -264,7 +162,7 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
    double* __restrict__ s_hat_shared = t_shared + num_rows;
    double* __restrict__ p_hat_shared = s_hat_shared + num_rows;
 
-   double* __restrict__ temp_ilu_requirements_shared = p_hat_shared + num_rows; // 2 * num_rows
+   double* __restrict__ temp_ilu_requirements_shared = p_hat_shared + num_rows; // 1 * num_rows
 
    
    
@@ -297,18 +195,8 @@ __global__ void KernelBatchedPreconditionedBiCGSTAB_ILU(const int num_rows, cons
         
         __syncthreads();
 
-        /*---------------------------------------------- generate preconditioner------------------------------------------*/
+        /*---------------------------------------------- preconditioner already generated------------------------------------------*/
 
-        for(int i = threadIdx.x; i < num_nz; i+= blockDim.x)
-        {
-            factored_array[i + page_id * num_nz] = vals_mat[i + page_id * num_nz];
-        }
-
-        __syncthreads();
-
-        compute_exact_ilu_0_approach1(num_rows, num_nz, row_ptrs, col_inds, factored_array, diag_info, temp_ilu_requirements_shared);
-
-        /*--------------------------------------------------- Preconditioner generated ----------------------------------------------------*/
 
         __shared__ double res_initial;
         __shared__ double rho_old;
@@ -561,8 +449,11 @@ int Batched_BiCGSTAB_ILU_Gpu_helper(const PagedCSRMatrices & A_pages,const Paged
 
     Find_locations_of_diagonal_elements(A_pages, diag_info);
     
-    double* factored_array = nullptr;
-    cudaMalloc((void**)&factored_array, sizeof(double)*A_pages.GetNumNz() * A_pages.GetNumPages());
+
+    PagedCSRMatrices Factored_Pages;
+    Copy_Gpu_PagedCSRMatrices(A_pages , Factored_Pages);
+
+    ComputeILU0Approach1(Factored_Pages , diag_info);
 
     
     dim3 block(THREADS_PER_BLOCK,1,1);
@@ -570,11 +461,11 @@ int Batched_BiCGSTAB_ILU_Gpu_helper(const PagedCSRMatrices & A_pages,const Paged
 
     //------------------------------------------------------------------------------- Call main solver kernel-------------------------------------------------//
 
-    const int dynamic_shared_mem_bytes =  11 * A_pages.GetNumRows() * sizeof(double);
+    const int dynamic_shared_mem_bytes =  10 * A_pages.GetNumRows() * sizeof(double);
 
     KernelBatchedPreconditionedBiCGSTAB_ILU<<< grid_solver, block , dynamic_shared_mem_bytes  >>>(A_pages.GetNumRows(), A_pages.GetNumNz(), A_pages.GetNumPages(),
     A_pages.GetPtrToGpuRowPtrs(),A_pages.GetPtrToGpuColInd(), A_pages.GetPtrToGpuValues(), b_pages.GetPtrToGpuValues(), x_pages.GetPtrToGpuValues(),
-    factored_array, diag_info , solver_results.GetPtrToGpuIterCount(), solver_results.GetPtrToGpuConvFlag() , solver_results.GetPtrToGpuIterResNorm());
+    Factored_Pages.GetPtrToGpuValues(), diag_info , solver_results.GetPtrToGpuIterCount(), solver_results.GetPtrToGpuConvFlag() , solver_results.GetPtrToGpuIterResNorm());
 
     cudaDeviceSynchronize();
 
@@ -582,7 +473,7 @@ int Batched_BiCGSTAB_ILU_Gpu_helper(const PagedCSRMatrices & A_pages,const Paged
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
 
     cudaFree(diag_info);
-    cudaFree(factored_array);
+    
     
     std::cout << " Time taken is: "  << (double)duration.count() << " microseconds\n\n ";  
 
@@ -607,7 +498,7 @@ int Batched_BiCGSTAB_ILU_Gpu_helper(const PagedCSRMatrices & A_pages,const Paged
 
 
 // A*x = b
-void Batched_conv_ILU_app1_Preconditioned_BiCGSTAB_merged_Gpu(const std::vector<std::string> & subdir, const PagedCSRMatrices & A_pages,
+void Batched_conv_ILU_app1_Preconditioned_BiCGSTAB_segregated_Gpu(const std::vector<std::string> & subdir, const PagedCSRMatrices & A_pages,
     const PagedVectors& b_pages,PagedVectors & x_pages,const bool is_scaled,  SolverResults & solver_results  )
 {   
 
@@ -634,9 +525,9 @@ void Batched_conv_ILU_app1_Preconditioned_BiCGSTAB_merged_Gpu(const std::vector<
     std::string solution_file;
 
     if(is_scaled == true)
-        solution_file = "x_scaled_gpu_conv_ilu_merged_app1_bicgstab.mtx";
+        solution_file = "x_scaled_gpu_conv_ilu_segregated_app1_bicgstab.mtx";
     else
-        solution_file = "x_gpu_conv_ilu_merged_app1_bicgstab.mtx";
+        solution_file = "x_gpu_conv_ilu_segregated_app1_bicgstab.mtx";
 
     if(success_code == 1)
     {

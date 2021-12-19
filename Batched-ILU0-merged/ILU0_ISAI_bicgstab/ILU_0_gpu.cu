@@ -5,10 +5,12 @@
 #include<cassert>
 #include<chrono>
 #include<cmath>
+
 #include "cuda_profiler_api.h"
 #include "matrix.h"
 #include "ReadWriteData.h"
 #include "header.h"
+
 #include "factorization.h"
 #include "ILU_0.h"
 
@@ -21,8 +23,8 @@ const int max_possible_grid_dim = 65536;
      //APPROACH-1
 
 
-__device__ void fill_partial_current_row_array(const int nrows, const int curr_row_index, double* const current_row_elements_arr, const int* const row_ptrs, 
-const int* const col_idxs, const double* const page_values, const int* const diag_ptrs)
+__device__ __forceinline__ void fill_partial_current_row_array(const int nrows, const int curr_row_index, double* const __restrict__ current_row_elements_arr, const int* const __restrict__ row_ptrs, 
+const int* const __restrict__ col_idxs, const double* const __restrict__ page_values, const int* const __restrict__ diag_ptrs)
 {
     const int diag_ele_loc = diag_ptrs[curr_row_index];
     const int row_end_loc = row_ptrs[curr_row_index + 1];
@@ -45,8 +47,8 @@ const int* const col_idxs, const double* const page_values, const int* const dia
 
 
 
-__device__ void modify_rows_below_curr_row(const int nrows, const int curr_row_index,const double* const column_elements_array_for_current_row, const int* const row_ptrs, 
-    const int* const col_idxs, double* const page_values, const int* const diag_ptrs)
+__device__ __forceinline__ void modify_rows_below_curr_row(const int nrows, const int curr_row_index,const double* const __restrict__ column_elements_array_for_current_row, const int* const __restrict__ row_ptrs, 
+    const int* const __restrict__ col_idxs, double* const __restrict__ page_values, const int* const __restrict__ diag_ptrs, double* const __restrict__ row_ele_arr)
 {       
     const int warp_id = threadIdx.x / WARP_SIZE;
 
@@ -54,7 +56,7 @@ __device__ void modify_rows_below_curr_row(const int nrows, const int curr_row_i
 
     const int total_num_warps_in_block = blockDim.x / WARP_SIZE;
 
-    __shared__ double row_ele_arr[MAX_NUM_ROWS];
+   // __shared__ double row_ele_arr[MAX_NUM_ROWS];
     //initilaize it with zeroes
 
     for(int i = threadIdx.x + curr_row_index + 1; i < nrows ; i += blockDim.x)
@@ -100,14 +102,20 @@ __device__ void modify_rows_below_curr_row(const int nrows, const int curr_row_i
 
 
 
-__global__ void compute_ilu_0_approach1_kernel(const int npages, const int nrows, const int nnz, const int* const row_ptrs, const int* const col_idxs, 
-    double* const values, const int* const diag_ptrs)
+__global__ void compute_ilu_0_approach1_kernel(const int npages, const int nrows, const int nnz, const int* const __restrict__ row_ptrs, const int* const __restrict__ col_idxs, 
+    double* const __restrict__ values, const int* const __restrict__ diag_ptrs)
 {
     for(int page_id = blockIdx.x ; page_id < npages; page_id += gridDim.x)
     {
         //Tried out ---> Having stuff in shared memory slows down the kernel, so don't copy global arrays to shared memory.
 
-        __shared__ double current_row_elements_arr[MAX_NUM_ROWS];
+        //  __shared__ double current_row_elements_arr[MAX_NUM_ROWS];
+
+
+        extern __shared__ double shared_mem[];
+        double* const __restrict__ current_row_elements_arr = shared_mem;
+        double* const __restrict__ row_ele_arr = shared_mem + nrows;
+     
 
         
         // __shared__ int row_ptrs_sh[MAX_NUM_ROWS + 1];
@@ -145,7 +153,7 @@ __global__ void compute_ilu_0_approach1_kernel(const int npages, const int nrows
 
             __syncthreads();
 
-            modify_rows_below_curr_row(nrows, curr_row_index, current_row_elements_arr, row_ptrs, col_idxs, values + nnz * page_id, diag_ptrs);
+            modify_rows_below_curr_row(nrows, curr_row_index, current_row_elements_arr, row_ptrs, col_idxs, values + nnz * page_id, diag_ptrs, row_ele_arr);
 
             //modify_rows_below_curr_row(nrows, curr_row_index, current_row_elements_arr, row_ptrs_sh, col_idxs_sh, page_vals_sh, diag_ptrs_sh);
 
@@ -162,7 +170,7 @@ __global__ void compute_ilu_0_approach1_kernel(const int npages, const int nrows
     }
 }
 
-
+} //unnamed namespace
 
 void ComputeILU0Approach1(PagedCSRMatrices & Factored_Pages , const int* const diag_ptrs)
 {   
@@ -170,12 +178,14 @@ void ComputeILU0Approach1(PagedCSRMatrices & Factored_Pages , const int* const d
 
     dim3 grid(Factored_Pages.GetNumPages());
 
-    compute_ilu_0_approach1_kernel<<< grid, block >>>(Factored_Pages.GetNumPages(), Factored_Pages.GetNumRows(), Factored_Pages.GetNumNz() , Factored_Pages.GetPtrToGpuRowPtrs(), 
+    const int dynamic_shared_mem_bytes =  2 * Factored_Pages.GetNumRows() * sizeof(double);
+
+    compute_ilu_0_approach1_kernel<<< grid, block, dynamic_shared_mem_bytes >>>(Factored_Pages.GetNumPages(), Factored_Pages.GetNumRows(), Factored_Pages.GetNumNz() , Factored_Pages.GetPtrToGpuRowPtrs(), 
 Factored_Pages.GetPtrToGpuColInd(), Factored_Pages.GetPtrToGpuValues(), diag_ptrs); // one thread block per small matrix in batch
 
 }
 
-
+namespace {
 
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------------//
 
@@ -1223,6 +1233,8 @@ dependencies, diag_starters, new_era, new_era_cpu.size(), dependencies_cpu.size(
 
 
 } //unnamed namespace
+
+
 
 //-------------------------------- calling function for all small pieces ----------------------------------------------------------------------------------------
 

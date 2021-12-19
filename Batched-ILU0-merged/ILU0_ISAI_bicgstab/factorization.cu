@@ -13,10 +13,10 @@ namespace{
 const int max_possible_grid_dim = 65536;
 
 template< typename T>
-__global__ void copy_array(const T* const src, T* const dst, const int length);
+__global__ void copy_array(const T* const __restrict__ src, T* const __restrict__ dst, const int length);
 
 
-__global__ void initialize_diag_info(const int nrows, int* const diag_info)
+__global__ void initialize_diag_info(const int nrows, int* const __restrict__ diag_info)
 {
     int gid = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -28,8 +28,8 @@ __global__ void initialize_diag_info(const int nrows, int* const diag_info)
 
 
 
-__global__ void missing_diagonal_elements(const int nrows, const int nnz, int* const diag_info, const int* const row_ptrs, const int* const col_idxs, 
-    const double* const values)
+__global__ void missing_diagonal_elements(const int nrows, const int nnz, int* const __restrict__ diag_info, const int* const __restrict__ row_ptrs, const int* const __restrict__ col_idxs, 
+    const double* const __restrict__ values)
 {
     int gid = blockDim.x * blockIdx.x  + threadIdx.x;
 
@@ -53,7 +53,7 @@ __global__ void missing_diagonal_elements(const int nrows, const int nnz, int* c
 
 
 //TODO: Parallelize Prefix Sum kernel
-__global__ void prefix_sum_kernel(const int length , int* const array)
+__global__ void prefix_sum_kernel(const int length , int* const __restrict__ array)
 {
     if(threadIdx.x == 0)
     {
@@ -67,7 +67,7 @@ __global__ void prefix_sum_kernel(const int length , int* const array)
 
 
 
-__global__ void  generate_row_pointers_common_diagonal_add(const int nrows, int* const new_row_ptrs, const int* const old_row_ptrs, const int* const diag_info)
+__global__ void  generate_row_pointers_common_diagonal_add(const int nrows, int* const __restrict__ new_row_ptrs, const int* const __restrict__ old_row_ptrs, const int* const __restrict__ diag_info)
 {
     int gid = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -79,8 +79,8 @@ __global__ void  generate_row_pointers_common_diagonal_add(const int nrows, int*
 }
 
 
-__global__ void  generate_col_holders_common_pattern_diagonal_add(const int nrows,  const int* const old_row_ptrs, 
-    const int* const old_col_idxs , const int* const new_row_ptrs, int* const new_col_holders)
+__global__ void  generate_col_holders_common_pattern_diagonal_add(const int nrows,  const int* const __restrict__ old_row_ptrs, 
+    const int* const __restrict__ old_col_idxs , const int* const __restrict__ new_row_ptrs, int* const __restrict__ new_col_holders)
 {
     int gid = blockDim.x * blockIdx.x  + threadIdx.x;
 
@@ -166,9 +166,9 @@ __global__ void  generate_col_holders_common_pattern_diagonal_add(const int nrow
 }
 
 
-__global__ void update_col_idxs_and_values_diagonal_add(const int npages, const int nrows, const int* const new_col_holders ,
-     const int old_nnz, const int new_nnz, const int* const old_col_idxs,
-const double* const old_values, int* const new_col_idxs, double* const new_values)
+__global__ void update_col_idxs_and_values_diagonal_add(const int npages, const int nrows, const int* const __restrict__ new_col_holders ,
+     const int old_nnz, const int new_nnz, const int* const __restrict__ old_col_idxs,
+const double* const __restrict__ old_values, int* const __restrict__ new_col_idxs, double* const __restrict__ new_values)
 {
     int gid = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -189,7 +189,7 @@ const double* const old_values, int* const new_col_idxs, double* const new_value
 
 
 
-__global__ void find_locn_of_diag_elements_kernel(const int nrows, int* const diag_ptrs , const int* const row_ptrs , const int* const col_idxs)
+__global__ void find_locn_of_diag_elements_kernel(const int nrows, int* const __restrict__ diag_ptrs , const int* const __restrict__ row_ptrs , const int* const __restrict__ col_idxs)
 {   
     int gid = blockDim.x * blockIdx.x  + threadIdx.x;
 
@@ -213,8 +213,8 @@ __global__ void find_locn_of_diag_elements_kernel(const int nrows, int* const di
 
 
 
-__global__ void  count_nnz_per_row_L_and_U(const int nrows, const int* const row_ptrs, const int* const diag_ptrs , int* const row_ptrs_L, 
-    int* const row_ptrs_U)
+__global__ void  count_nnz_per_row_L_and_U(const int nrows, const int* const __restrict__ row_ptrs, const int* const __restrict__ diag_ptrs , int* const __restrict__ row_ptrs_L, 
+    int* const __restrict__ row_ptrs_U)
     {
         int gid = threadIdx.x + blockIdx.x * blockDim.x;
     
@@ -237,8 +237,8 @@ __global__ void  count_nnz_per_row_L_and_U(const int nrows, const int* const row
 
 
 
-__global__ void generate_common_pattern_to_fill_L_and_U(const int nrows, const int* const row_ptrs, const int* const col_idxs, const int* const row_ptrs_L ,
-const int* const row_ptrs_U, int* const L_col_holders , int* const U_col_holders)
+__global__ void generate_common_pattern_to_fill_L_and_U(const int nrows, const int* const __restrict__ row_ptrs, const int* const __restrict__ col_idxs, const int* const __restrict__ row_ptrs_L ,
+const int* const __restrict__ row_ptrs_U, int* const __restrict__ L_col_holders , int* const __restrict__ U_col_holders)
 {
         int gid = blockDim.x * blockIdx.x  + threadIdx.x;
 
@@ -285,8 +285,8 @@ const int* const row_ptrs_U, int* const L_col_holders , int* const U_col_holders
 
 
 
-__global__ void fill_L_and_U(const int npages, const int nrows, const int nnz, const int* const col_idxs, const double* const vals, const int L_nnz, int* const L_col_idxs, 
-double* const L_vals, const int* const L_col_holders , const int U_nnz, int* const U_col_idxs, double* const U_vals, const int* const U_col_holders)
+__global__ void fill_L_and_U(const int npages, const int nrows, const int nnz, const int* const __restrict__ col_idxs, const double* const __restrict__ vals, const int L_nnz, int* const __restrict__ L_col_idxs, 
+double* const __restrict__ L_vals, const int* const __restrict__ L_col_holders , const int U_nnz, int* const __restrict__ U_col_idxs, double* const __restrict__ U_vals, const int* const __restrict__ U_col_holders)
 {
     int gid = threadIdx.x + blockIdx.x * blockDim.x;
     int greater_nnz = L_nnz > U_nnz ? L_nnz : U_nnz;
@@ -346,7 +346,7 @@ double* const L_vals, const int* const L_col_holders , const int U_nnz, int* con
 
 
 
-__global__ void print_kernel(const int length, const int * const arr)
+__global__ void print_kernel(const int length, const int * const __restrict__ arr)
 {
     if(threadIdx.x == 0)
     {   
@@ -358,7 +358,7 @@ __global__ void print_kernel(const int length, const int * const arr)
     }
 }
 
-__global__ void print_kernel(const int length, const double * const arr)
+__global__ void print_kernel(const int length, const double * const __restrict__ arr)
 {
     if(threadIdx.x == 0)
     {   
@@ -373,7 +373,7 @@ __global__ void print_kernel(const int length, const double * const arr)
 
 
 template< typename T>
-__global__ void copy_array(const T* const src, T* const dst, const int length)
+__global__ void copy_array(const T* const __restrict__ src, T* const __restrict__ dst, const int length)
 {
     const int gid = threadIdx.x   +   blockIdx.x * blockDim.x;
 

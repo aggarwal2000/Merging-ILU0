@@ -5,7 +5,7 @@ nvcc factorization.cu ILU_0_gpu.cu parILU_0_gpu.cu isai_gpu.cu  matrix.cu mmio.c
 for category in  LF10 pores_1 mesh1em1 bcsstk01
 do
 	
-	file_name="timings_conv_ilu0_app1_sep_"$category"_.txt"
+	file_name="timings_conv_ilu0_app1_with_L_and_U_"$category"_.txt"
 
 	for ((problem_size= 100 ; problem_size<=10000 ; problem_size+=100))
 	do
@@ -29,6 +29,24 @@ do
 	do
 
 		./ilu_merged $category $problem_size 0  $file_name
+		
+	done
+
+	
+done
+
+
+nvcc factorization.cu ILU_0_gpu.cu parILU_0_gpu.cu isai_gpu.cu  matrix.cu mmio.cpp  ReadWriteData.cpp SolverResults.cu PrecondBiCGSTAB_exact_ilu0_app1_segregated_gpu.cu main_bicgstab_ilu_segregated.cpp -o ilu_segregated   
+
+for category in  LF10 pores_1 mesh1em1 bcsstk01
+do
+	
+	file_name="timings_conv_ilu0_app1_segregated_"$category"_.txt"
+
+	for ((problem_size= 100 ; problem_size<=10000 ; problem_size+=100))
+	do
+
+		./ilu_segregated $category $problem_size 0  $file_name
 		
 	done
 
